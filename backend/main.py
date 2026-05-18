@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Depends, Query
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Depends, Query, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import uvicorn
@@ -11,6 +11,8 @@ import json
 import imaplib
 import smtplib
 import hashlib
+import secrets
+import string
 import email
 import httpx
 from email.message import EmailMessage
@@ -19,7 +21,7 @@ from email.utils import parseaddr, parsedate_to_datetime
 from dotenv import load_dotenv
 from database import SessionLocal, get_db, init_db
 from service import AnalysisService
-from schemas import AnalysisHistory, AuthResponse, ErrorResponse, JobRolesSaveRequest, MailPullRequest, ShortlistEmailRequest, UserCreate, UserLogin, UserRead
+from schemas import AnalysisHistory, AuthResponse, ErrorResponse, JobRolesSaveRequest, MailPullRequest, ShortlistEmailRequest, UserCreate, UserForgotPassword, UserLogin, UserRead
 from models import JobRole, JobRoleRequirement, ResumeAnalysis, User, InboundEmail
 from typing import Optional
 import logging
@@ -84,6 +86,38 @@ def verify_password(password: str, hashed_password: str) -> bool:
         return digest.hex() == digest_hex
     except Exception:
         return False
+
+
+def find_user_by_login_identifier(db, identifier: str):
+    login_id = identifier.lower().strip()
+    if not login_id:
+        return None
+
+    lookup_values = [login_id]
+    if "@" not in login_id:
+        lookup_values.append(f"{login_id}@tektalis.com")
+
+    return db.query(User).filter(User.email.in_(lookup_values)).first()
+
+
+def is_user_creation_admin(user: User | None) -> bool:
+    return bool(
+        user
+        and user.is_active
+        and user.role == "admin"
+    )
+
+
+def generate_temporary_password(length: int = 12) -> str:
+    alphabet = string.ascii_letters + string.digits
+    while True:
+        password = "".join(secrets.choice(alphabet) for _ in range(length))
+        if (
+            any(char.islower() for char in password)
+            and any(char.isupper() for char in password)
+            and any(char.isdigit() for char in password)
+        ):
+            return password
 
 
 def score_analysis_payload(
@@ -416,6 +450,33 @@ def graph_send_shortlist_email(
     graph_request("POST", f"{graph_user_path(settings, app_token)}/sendMail", token, json=payload)
 
 
+def graph_send_password_reset_email(
+    settings: dict,
+    token: str,
+    app_token: bool,
+    to_email: str,
+    temporary_password: str,
+):
+    payload = {
+        "message": {
+            "subject": "Resume Analyzer password reset",
+            "body": {
+                "contentType": "Text",
+                "content": (
+                    "Hi,\n\n"
+                    "Your Resume Analyzer password was reset.\n\n"
+                    f"Temporary password: {temporary_password}\n\n"
+                    "Use this password to sign in, then keep it somewhere secure.\n\n"
+                    "Regards,\nResume Analyzer Team"
+                ),
+            },
+            "toRecipients": [{"emailAddress": {"address": to_email}}],
+        },
+        "saveToSentItems": True,
+    }
+    graph_request("POST", f"{graph_user_path(settings, app_token)}/sendMail", token, json=payload)
+
+
 def authenticate_imap(mailbox: imaplib.IMAP4_SSL, settings: dict):
     if settings["auth_method"] == "oauth2":
         token = get_microsoft_access_token(
@@ -463,6 +524,35 @@ def send_shortlist_email(to_email: str, candidate_name: str | None, role_title: 
         f"with a fit score of {round(score, 1)}.\n\n"
         "Our team will contact you with the next steps.\n\n"
         "Regards,\nRecruitment Team"
+    )
+
+    with smtplib.SMTP(settings["smtp_host"], settings["smtp_port"], timeout=30) as smtp:
+        smtp.starttls()
+        authenticate_smtp(smtp, settings)
+        smtp.send_message(message)
+
+
+def send_password_reset_email(to_email: str, temporary_password: str):
+    settings = mail_settings()
+    if not settings["username"] or not settings["from_email"]:
+        raise RuntimeError("MAIL_USERNAME and MAIL_FROM must be configured")
+    if settings["auth_method"] == "graph":
+        token, app_token = get_graph_access_token(settings, ["Mail.Send", "offline_access"])
+        graph_send_password_reset_email(settings, token, app_token, to_email, temporary_password)
+        return
+    if settings["auth_method"] != "oauth2" and not settings["password"]:
+        raise RuntimeError("MAIL_PASSWORD must be configured for basic mail login")
+
+    message = EmailMessage()
+    message["From"] = settings["from_email"]
+    message["To"] = to_email
+    message["Subject"] = "Resume Analyzer password reset"
+    message.set_content(
+        "Hi,\n\n"
+        "Your Resume Analyzer password was reset.\n\n"
+        f"Temporary password: {temporary_password}\n\n"
+        "Use this password to sign in, then keep it somewhere secure.\n\n"
+        "Regards,\nResume Analyzer Team"
     )
 
     with smtplib.SMTP(settings["smtp_host"], settings["smtp_port"], timeout=30) as smtp:
@@ -626,7 +716,15 @@ async def list_users(db = Depends(get_db)):
 
 
 @app.post("/admin/users", response_model=UserRead, tags=["Admin"])
-async def create_user(payload: UserCreate, db = Depends(get_db)):
+async def create_user(
+    payload: UserCreate,
+    db = Depends(get_db),
+    x_user_email: str | None = Header(None),
+):
+    current_user = find_user_by_login_identifier(db, x_user_email or "")
+    if not is_user_creation_admin(current_user):
+        raise HTTPException(status_code=403, detail="Only admin users can create users")
+
     existing = db.query(User).filter(User.email == payload.email.lower().strip()).first()
     if existing:
         raise HTTPException(status_code=409, detail="A user with this username already exists")
@@ -645,26 +743,26 @@ async def create_user(payload: UserCreate, db = Depends(get_db)):
 
 @app.post("/auth/login", response_model=AuthResponse, tags=["Auth"])
 async def login(payload: UserLogin, db = Depends(get_db)):
-    user = db.query(User).filter(User.email == payload.email.lower().strip()).first()
+    user = find_user_by_login_identifier(db, payload.email)
     if not user or not user.is_active or not verify_password(payload.password, user.hashed_password):
         raise HTTPException(status_code=401, detail="Invalid username or password")
     return {"user": user}
 
 
-@app.post("/auth/bootstrap", response_model=AuthResponse, tags=["Auth"])
-async def bootstrap_first_user(payload: UserCreate, db = Depends(get_db)):
-    if db.query(User).count() > 0:
-        raise HTTPException(status_code=409, detail="Initial user already exists")
-    user = User(
-        email=payload.email.lower().strip(),
-        hashed_password=hash_password(payload.password),
-        role="admin",
-        is_active=True,
-    )
-    db.add(user)
-    db.commit()
-    db.refresh(user)
-    return {"user": user}
+@app.post("/auth/forgot-password", tags=["Auth"])
+async def forgot_password(payload: UserForgotPassword, db = Depends(get_db)):
+    user = find_user_by_login_identifier(db, payload.email)
+    if user and user.is_active:
+        temporary_password = generate_temporary_password()
+        send_password_reset_email(user.email, temporary_password)
+        user.hashed_password = hash_password(temporary_password)
+        db.commit()
+    return {
+        "message": (
+            "If this account exists, a new temporary password has "
+            "been sent to the registered email."
+        )
+    }
 
 
 @app.get("/job-roles", tags=["Job Roles"])

@@ -292,6 +292,7 @@ export default function App() {
   const [error, setError] = useState(null);
   const [mailPollStatus, setMailPollStatus] = useState("Automatic Graph mailbox analysis checks every 2 minutes.");
   const [mailPollBusy, setMailPollBusy] = useState(false);
+  const canManageUsers = currentUser?.role === "admin";
 
   const saveRoles = async (roles) => {
     setJobConfigs(roles);
@@ -360,7 +361,8 @@ export default function App() {
     loadHistory();
 
     const handlePopState = (event) => {
-      const page = event.state?.page || "configure";
+      const requestedPage = event.state?.page || "configure";
+      const page = requestedPage === "users" && !canManageUsers ? "configure" : requestedPage;
       setView(page);
       if (page !== "results") setSelectedAnalysis(null);
       setError(null);
@@ -372,7 +374,14 @@ export default function App() {
       window.removeEventListener("popstate", handlePopState);
       window.clearInterval(historyRefresh);
     };
-  }, [currentUser]);
+  }, [currentUser, canManageUsers]);
+
+  useEffect(() => {
+    if (currentUser && view === "users" && !canManageUsers) {
+      setView("configure");
+      window.history.replaceState({ page: "configure" }, "", "#configure");
+    }
+  }, [currentUser, view, canManageUsers]);
 
   const analyzeOne = async (formData) => {
     const res = await fetch(`${API_BASE}/analyze`, {
@@ -421,11 +430,12 @@ export default function App() {
   };
 
   const handleNavigate = (page) => {
-    setView(page);
-    if (page !== "results") setSelectedAnalysis(null);
+    const nextPage = page === "users" && !canManageUsers ? "configure" : page;
+    setView(nextPage);
+    if (nextPage !== "results") setSelectedAnalysis(null);
     setError(null);
-    const hash = page === "list" ? "leaderboard" : page;
-    window.history.pushState({ page }, "", `#${hash}`);
+    const hash = nextPage === "list" ? "leaderboard" : nextPage;
+    window.history.pushState({ page: nextPage }, "", `#${hash}`);
   };
 
   const handleSelectAnalysis = (analysis) => {
@@ -511,6 +521,10 @@ export default function App() {
     return <SignInPage onSignedIn={handleSignedIn} />;
   }
 
+  if (view === "users" && !canManageUsers) {
+    return null;
+  }
+
   return (
     <div className="app">
       <header className="header">
@@ -540,6 +554,7 @@ export default function App() {
             onMailPulled={() => runMailboxAnalysis({ navigateToList: true })}
             mailPollStatus={mailPollStatus}
             mailPollBusy={mailPollBusy}
+            currentUser={currentUser}
           />
         )}
         {view === "configure" && (
@@ -548,6 +563,7 @@ export default function App() {
             onSave={handleSaveRoles}
             createBlankRole={createBlankRole}
             onNavigate={handleNavigate}
+            currentUser={currentUser}
           />
         )}
         {view === "list" && (
@@ -558,6 +574,7 @@ export default function App() {
             loading={historyLoading}
             error={error}
             activeJob={defaultUploadJob}
+            currentUser={currentUser}
           />
         )}
         {view === "users" && (

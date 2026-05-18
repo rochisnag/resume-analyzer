@@ -1,7 +1,6 @@
 import { useMemo, useState } from "react";
 import AppNav from "./AppNav";
 
-const API_BASE = "http://localhost:8000";
 const scoreNumber = (score) => Math.round(Number(score) || 0);
 
 const getScore = (analysis) => (
@@ -52,19 +51,14 @@ const getInitials = (name) => (
 const csvEscape = (value) => `"${String(value ?? "").replace(/"/g, '""')}"`;
 const levelOrder = ["junior", "mid", "senior", "executive"];
 
-export default function ResumeList({ analyses, onSelect, onNavigate, loading, error, activeJob }) {
-  const [minScore, setMinScore] = useState("0");
+export default function ResumeList({ analyses, onSelect, onNavigate, loading, error, activeJob, currentUser }) {
   const [sortBy, setSortBy] = useState("received");
   const [query, setQuery] = useState("");
-  const [mailStatus, setMailStatus] = useState("");
-  const [mailing, setMailing] = useState(false);
   const rows = analyses;
 
   const visibleAnalyses = useMemo(() => {
-    const threshold = Number(minScore);
     const needle = query.trim().toLowerCase();
     return [...rows]
-      .filter((analysis) => getScore(analysis) >= threshold)
       .filter((analysis) => {
         if (!needle) return true;
         return [
@@ -85,7 +79,7 @@ export default function ResumeList({ analyses, onSelect, onNavigate, loading, er
         if (sortBy === "received") return new Date(b.received_date || b.created_at) - new Date(a.received_date || a.created_at);
         return getScore(b) - getScore(a);
       });
-  }, [rows, minScore, query, sortBy]);
+  }, [rows, query, sortBy]);
 
   const groupedAnalyses = useMemo(() => (
     levelOrder
@@ -140,56 +134,16 @@ export default function ResumeList({ analyses, onSelect, onNavigate, loading, er
     URL.revokeObjectURL(url);
   };
 
-  const emailShortlisted = async () => {
-    setMailing(true);
-    setMailStatus("");
-    try {
-      const res = await fetch(`${API_BASE}/mail/send-shortlisted`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          role_title: activeJob?.roleTitle || "",
-          min_fit_score: Number(activeJob?.minFitScore) || 80,
-          limit: 100,
-        }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.detail || "Unable to send shortlist emails");
-
-      const details = [];
-      if (data.sent_count) details.push(`${data.sent_count} sent`);
-      if (data.failed_count) details.push(`${data.failed_count} failed`);
-      if (data.skipped_count) details.push(`${data.skipped_count} skipped`);
-      setMailStatus(details.length ? `Shortlist emails: ${details.join(", ")}` : "No eligible shortlisted candidates found");
-    } catch (mailError) {
-      setMailStatus(mailError.message);
-    } finally {
-      setMailing(false);
-    }
-  };
-
   return (
     <div className="leaderboard-page">
       <div className="leaderboard-shell">
         <AppNav
           active="list"
           onNavigate={onNavigate}
+          currentUser={currentUser}
           rightSlot={
             <>
-            <button type="button" disabled={mailing} onClick={emailShortlisted}>
-              {mailing ? "Sending..." : "Email Shortlisted"}
-            </button>
             <button type="button" onClick={exportCsv}>Export CSV</button>
-            <label className="compact-filter">
-              <span>Filter</span>
-              <select value={minScore} onChange={(event) => setMinScore(event.target.value)}>
-                <option value="0">All</option>
-                <option value="40">40+</option>
-                <option value="55">55+</option>
-                <option value="70">70+</option>
-                <option value="85">85+</option>
-              </select>
-            </label>
             </>
           }
         />
@@ -219,7 +173,6 @@ export default function ResumeList({ analyses, onSelect, onNavigate, loading, er
         <div className="ranked-heading">
           <div>
             <h2>Ranked candidates</h2>
-            <p>Live rows from saved resume analyses. Click a candidate name to open the analysis page.</p>
           </div>
           <div className="leaderboard-controls">
             <input
@@ -245,8 +198,6 @@ export default function ResumeList({ analyses, onSelect, onNavigate, loading, er
             <span>!</span> {error}
           </div>
         )}
-        {mailStatus && <p className="admin-status">{mailStatus}</p>}
-
         <div className="leaderboard-table">
           <div className="leaderboard-table-head">
             <span>Candidate</span>
@@ -262,7 +213,7 @@ export default function ResumeList({ analyses, onSelect, onNavigate, loading, er
           {loading ? (
             <div className="resume-empty">Loading resumes...</div>
           ) : visibleAnalyses.length === 0 ? (
-            <div className="resume-empty">No candidates match this filter.</div>
+            <div className="resume-empty">No candidates match this search.</div>
           ) : (
             <div className="leaderboard-table-body">
               {groupedAnalyses.map((group) => (

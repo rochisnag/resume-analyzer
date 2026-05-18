@@ -3,7 +3,8 @@ import AppNav from "./AppNav";
 
 const API_BASE = "http://localhost:8000";
 
-export default function AdminPage({ onNavigate }) {
+export default function AdminPage({ onNavigate, currentUser }) {
+  const canCreateUsers = currentUser?.role === "admin";
   const [userDraft, setUserDraft] = useState({
     email: "",
     password: "",
@@ -13,10 +14,17 @@ export default function AdminPage({ onNavigate }) {
 
   const createUser = async (event) => {
     event.preventDefault();
+    if (!canCreateUsers) {
+      setUserStatus("Only admin users can create users");
+      return;
+    }
     setUserStatus("");
     const res = await fetch(`${API_BASE}/admin/users`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "X-User-Email": currentUser.email,
+      },
       body: JSON.stringify(userDraft),
     });
     if (!res.ok) {
@@ -34,6 +42,7 @@ export default function AdminPage({ onNavigate }) {
         <AppNav
           active="users"
           onNavigate={onNavigate}
+          currentUser={currentUser}
           rightSlot={<span className="admin-pill">Access</span>}
         />
 
@@ -73,7 +82,7 @@ export default function AdminPage({ onNavigate }) {
                 <option value="admin">Admin</option>
               </select>
             </label>
-            <button className="primary-action" type="submit">Create user</button>
+            <button className="primary-action" type="submit" disabled={!canCreateUsers}>Create user</button>
             {userStatus && <p className="admin-status">{userStatus}</p>}
           </form>
 
@@ -99,10 +108,6 @@ export default function AdminPage({ onNavigate }) {
                 <div>
                   <strong>2</strong>
                   <span>Available roles</span>
-                </div>
-                <div>
-                  <strong>8+</strong>
-                  <span>Password characters</span>
                 </div>
               </div>
             </section>

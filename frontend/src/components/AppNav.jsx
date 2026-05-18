@@ -1,10 +1,11 @@
-export default function AppNav({ active, onNavigate, rightSlot }) {
+export default function AppNav({ active, onNavigate, rightSlot, currentUser }) {
+  const canManageUsers = currentUser?.role === "admin";
   const items = [
     ["configure", "Configure"],
     ["upload", "Upload"],
     ["list", "Leaderboard"],
-    ["users", "Users"],
-  ];
+    canManageUsers ? ["users", "Users"] : null,
+  ].filter(Boolean);
 
   return (
     <nav className="leaderboard-nav" aria-label="ResumeEval sections">

@@ -5,16 +5,12 @@ const API_BASE = "http://localhost:8000";
 
 export default function SignInPage({ onSignedIn }) {
   const [credentials, setCredentials] = useState({ email: "", password: "" });
-  const [setupMode, setSetupMode] = useState(false);
+  const [forgotMode, setForgotMode] = useState(false);
   const [status, setStatus] = useState("");
   const [busy, setBusy] = useState(false);
 
   const signIn = async (event) => {
     event.preventDefault();
-    if (setupMode) {
-      await createFirstAdmin();
-      return;
-    }
     setBusy(true);
     setStatus("");
     try {
@@ -36,21 +32,24 @@ export default function SignInPage({ onSignedIn }) {
     }
   };
 
-  const createFirstAdmin = async () => {
+  const resetPassword = async (event) => {
+    event.preventDefault();
     setBusy(true);
     setStatus("");
     try {
-      const res = await fetch(`${API_BASE}/auth/bootstrap`, {
+      const res = await fetch(`${API_BASE}/auth/forgot-password`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...credentials, role: "admin" }),
+        body: JSON.stringify({ email: credentials.email }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        setStatus(data.detail || "Unable to create first admin");
+        setStatus(data.detail || "Unable to reset password");
         return;
       }
-      onSignedIn(data.user);
+      setStatus(data.message || "Check your email for the new temporary password");
+      setForgotMode(false);
+      setCredentials({ ...credentials, password: "" });
     } catch {
       setStatus("Unable to reach the backend");
     } finally {
@@ -67,13 +66,13 @@ export default function SignInPage({ onSignedIn }) {
           </span>
           <div>
             <span className="eyebrow">Resume Analyzer</span>
-            <h1>{setupMode ? "Create first admin" : "Sign in"}</h1>
+            <h1>{forgotMode ? "Reset password" : "Sign in"}</h1>
           </div>
         </div>
 
-        <form className="signin-form" onSubmit={signIn}>
+        <form className="signin-form" onSubmit={forgotMode ? resetPassword : signIn}>
           <label>
-            <span>Username</span>
+            <span>Email / ID</span>
             <input
               type="text"
               autoComplete="username"
@@ -82,34 +81,30 @@ export default function SignInPage({ onSignedIn }) {
               required
             />
           </label>
-          <label>
-            <span>Password</span>
-            <input
-              type="password"
-              autoComplete="current-password"
-              minLength={setupMode ? 8 : undefined}
-              value={credentials.password}
-              onChange={(event) => setCredentials({ ...credentials, password: event.target.value })}
-              required
-            />
-          </label>
-          <button
-            className="primary-action"
-            type={setupMode ? "button" : "submit"}
-            disabled={busy}
-            onClick={setupMode ? createFirstAdmin : undefined}
-          >
-            {busy ? "Working..." : setupMode ? "Create admin" : "Sign in"}
+          {!forgotMode && (
+            <label>
+              <span>Password</span>
+              <input
+                type="password"
+                autoComplete="current-password"
+                value={credentials.password}
+                onChange={(event) => setCredentials({ ...credentials, password: event.target.value })}
+                required
+              />
+            </label>
+          )}
+          <button className="primary-action" type="submit" disabled={busy}>
+            {busy ? "Working..." : forgotMode ? "Reset password" : "Sign in"}
           </button>
           <button
             className="signin-link"
             type="button"
             onClick={() => {
-              setSetupMode(!setupMode);
+              setForgotMode(!forgotMode);
               setStatus("");
             }}
           >
-            {setupMode ? "Back to sign in" : "First time setup"}
+            {forgotMode ? "Back to sign in" : "Forgot password?"}
           </button>
           {status && <p className="signin-status">{status}</p>}
         </form>

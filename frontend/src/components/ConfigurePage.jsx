@@ -21,7 +21,7 @@ const extractMatches = (text, catalog) => {
   return catalog.filter((item) => normalized.includes(item.toLowerCase()));
 };
 
-export default function ConfigurePage({ roles, onSave, createBlankRole, onNavigate }) {
+export default function ConfigurePage({ roles, onSave, createBlankRole, onNavigate, currentUser }) {
   const [drafts, setDrafts] = useState(roles);
   const [selectedId, setSelectedId] = useState(roles.find((role) => role.active)?.id || roles[0]?.id);
   const [skillText, setSkillText] = useState("");
@@ -121,6 +121,7 @@ export default function ConfigurePage({ roles, onSave, createBlankRole, onNaviga
         <AppNav
           active="configure"
           onNavigate={onNavigate}
+          currentUser={currentUser}
           rightSlot={<button type="button" onClick={addRole}>Add Role</button>}
         />
         {status && <p className="config-status">{status}</p>}

@@ -103,6 +103,11 @@ class UserLogin(BaseModel):
     password: str = Field(..., min_length=1, max_length=255)
 
 
+class UserForgotPassword(BaseModel):
+    """Password reset request for a local application user."""
+    email: str = Field(..., min_length=3, max_length=255)
+
+
 class UserRead(BaseModel):
     id: int
     email: str

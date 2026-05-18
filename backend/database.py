@@ -65,12 +65,22 @@ def ensure_default_user():
     """Create the default local user if it is missing."""
     from models import User
 
+    default_email = "rochisna.g@tektalis.com"
+    legacy_email = "tek-1"
+
     with SessionLocal() as db:
-        existing = db.query(User).filter(User.email == "tek-1").first()
+        existing = db.query(User).filter(User.email == default_email).first()
         if existing:
             return
+        legacy_user = db.query(User).filter(User.email == legacy_email).first()
+        if legacy_user:
+            legacy_user.email = default_email
+            legacy_user.role = "admin"
+            legacy_user.is_active = True
+            db.commit()
+            return
         user = User(
-            email="tek-1",
+            email=default_email,
             hashed_password=hash_default_password("Tek@123"),
             role="admin",
             is_active=True,

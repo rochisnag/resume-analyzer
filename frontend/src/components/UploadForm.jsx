@@ -11,6 +11,7 @@ export default function UploadForm({
   onMailPulled,
   mailPollStatus,
   mailPollBusy,
+  currentUser,
 }) {
   const [files, setFiles] = useState([]);
   const [dragging, setDragging] = useState(false);
@@ -78,7 +79,7 @@ export default function UploadForm({
   return (
     <div className="leaderboard-page">
       <div className="leaderboard-shell upload-workspace">
-        <AppNav active="upload" onNavigate={onNavigate} />
+        <AppNav active="upload" onNavigate={onNavigate} currentUser={currentUser} />
 
         <div className="intake-tabs" role="tablist" aria-label="Resume intake mode">
           <button type="button" className={intakeMode === "manual" ? "active" : ""} onClick={() => setIntakeMode("manual")}>Manual upload</button>
@@ -200,7 +201,7 @@ export default function UploadForm({
               <ul>
                 <li><span className="section-dot purple"></span>Summary</li>
                 <li><span className="section-dot green"></span>Technical Skills</li>
-                <li><span className="section-dot orange"></span>Projects weighted {selectedJob?.weights?.projects || 0}%</li>
+                <li><span className="section-dot orange"></span>Projects weighted</li>
                 <li><span className="section-dot gray"></span>Education</li>
               </ul>
             </section>

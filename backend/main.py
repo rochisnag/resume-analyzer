@@ -19,7 +19,7 @@ from email.utils import parseaddr, parsedate_to_datetime
 from dotenv import load_dotenv
 from database import SessionLocal, get_db, init_db
 from service import AnalysisService
-from schemas import AnalysisHistory, ErrorResponse, JobRolesSaveRequest, MailPullRequest, ShortlistEmailRequest, UserCreate, UserRead
+from schemas import AnalysisHistory, AuthResponse, ErrorResponse, JobRolesSaveRequest, MailPullRequest, ShortlistEmailRequest, UserCreate, UserLogin, UserRead
 from models import JobRole, JobRoleRequirement, ResumeAnalysis, User, InboundEmail
 from typing import Optional
 import logging
@@ -68,6 +68,22 @@ def hash_password(password: str) -> str:
     salt = os.urandom(16)
     digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, 120000)
     return f"pbkdf2_sha256${salt.hex()}${digest.hex()}"
+
+
+def verify_password(password: str, hashed_password: str) -> bool:
+    try:
+        algorithm, salt_hex, digest_hex = hashed_password.split("$", 2)
+        if algorithm != "pbkdf2_sha256":
+            return False
+        digest = hashlib.pbkdf2_hmac(
+            "sha256",
+            password.encode("utf-8"),
+            bytes.fromhex(salt_hex),
+            120000,
+        )
+        return digest.hex() == digest_hex
+    except Exception:
+        return False
 
 
 def score_analysis_payload(
@@ -625,6 +641,30 @@ async def create_user(payload: UserCreate, db = Depends(get_db)):
     db.commit()
     db.refresh(user)
     return user
+
+
+@app.post("/auth/login", response_model=AuthResponse, tags=["Auth"])
+async def login(payload: UserLogin, db = Depends(get_db)):
+    user = db.query(User).filter(User.email == payload.email.lower().strip()).first()
+    if not user or not user.is_active or not verify_password(payload.password, user.hashed_password):
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+    return {"user": user}
+
+
+@app.post("/auth/bootstrap", response_model=AuthResponse, tags=["Auth"])
+async def bootstrap_first_user(payload: UserCreate, db = Depends(get_db)):
+    if db.query(User).count() > 0:
+        raise HTTPException(status_code=409, detail="Initial user already exists")
+    user = User(
+        email=payload.email.lower().strip(),
+        hashed_password=hash_password(payload.password),
+        role="admin",
+        is_active=True,
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return {"user": user}
 
 
 @app.get("/job-roles", tags=["Job Roles"])

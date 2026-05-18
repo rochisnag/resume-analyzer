@@ -97,6 +97,12 @@ class UserCreate(BaseModel):
     role: str = Field("recruiter", pattern="^(admin|recruiter)$")
 
 
+class UserLogin(BaseModel):
+    """Application login request."""
+    email: str = Field(..., min_length=3, max_length=255)
+    password: str = Field(..., min_length=1, max_length=255)
+
+
 class UserRead(BaseModel):
     id: int
     email: str
@@ -106,6 +112,10 @@ class UserRead(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class AuthResponse(BaseModel):
+    user: UserRead
 
 
 class MailPullRequest(BaseModel):

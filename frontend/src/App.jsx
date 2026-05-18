@@ -4,11 +4,13 @@ import ResumeList from "./components/ResumeList";
 import ResultsDashboard from "./components/ResultsDashboard";
 import ConfigurePage from "./components/ConfigurePage";
 import AdminPage from "./components/AdminPage";
+import SignInPage from "./components/SignInPage";
 import tektalisLogo from "./assets/tektalis-logo.svg";
 import "./App.css";
 
 const API_BASE = "http://127.0.0.1:8000";
 const JOB_CONFIG_STORAGE_KEY = "resumeiq.jobConfigs";
+const AUTH_STORAGE_KEY = "resumeiq.currentUser";
 
 const splitList = (value) => (
   value
@@ -266,6 +268,14 @@ const createBlankRole = () => ({
 });
 
 export default function App() {
+  const [currentUser, setCurrentUser] = useState(() => {
+    try {
+      const saved = window.localStorage.getItem(AUTH_STORAGE_KEY);
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
+  });
   const [view, setView] = useState("configure");
   const [jobConfigs, setJobConfigs] = useState(() => {
     try {
@@ -344,6 +354,7 @@ export default function App() {
   };
 
   useEffect(() => {
+    if (!currentUser) return undefined;
     window.history.replaceState({ page: "configure" }, "", "#configure");
     loadRoles();
     loadHistory();
@@ -361,7 +372,7 @@ export default function App() {
       window.removeEventListener("popstate", handlePopState);
       window.clearInterval(historyRefresh);
     };
-  }, []);
+  }, [currentUser]);
 
   const analyzeOne = async (formData) => {
     const res = await fetch(`${API_BASE}/analyze`, {
@@ -476,11 +487,29 @@ export default function App() {
   };
 
   useEffect(() => {
+    if (!currentUser) return undefined;
     const mailboxRefresh = window.setInterval(() => {
       runMailboxAnalysis();
     }, 120000);
     return () => window.clearInterval(mailboxRefresh);
-  }, [runMailboxAnalysis]);
+  }, [currentUser, runMailboxAnalysis]);
+
+  const handleSignedIn = (user) => {
+    setCurrentUser(user);
+    window.localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(user));
+  };
+
+  const handleSignOut = () => {
+    setCurrentUser(null);
+    setSelectedAnalysis(null);
+    setError(null);
+    window.localStorage.removeItem(AUTH_STORAGE_KEY);
+    window.history.replaceState({ page: "signin" }, "", "#signin");
+  };
+
+  if (!currentUser) {
+    return <SignInPage onSignedIn={handleSignedIn} />;
+  }
 
   return (
     <div className="app">
@@ -492,7 +521,10 @@ export default function App() {
             </span>
             <span className="logo-text">Resume Analyzer</span>
           </div>
-          <p className="header-tagline">AI-powered resume analysis</p>
+          <div className="header-session">
+            <span>{currentUser.email}</span>
+            <button type="button" onClick={handleSignOut}>Sign out</button>
+          </div>
         </div>
       </header>
 
@@ -531,6 +563,7 @@ export default function App() {
         {view === "users" && (
           <AdminPage
             onNavigate={handleNavigate}
+            currentUser={currentUser}
           />
         )}
         {view === "analytics" && selectedAnalysis && (

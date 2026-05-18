@@ -1,0 +1,8 @@
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+*.log
+.env
+uploads/
+.msal_token_cache.bin

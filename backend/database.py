@@ -2,6 +2,7 @@ from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import sessionmaker, declarative_base
 from pydantic_settings import BaseSettings
 import os
+import time
 
 class Settings(BaseSettings):
     """Application settings loaded from environment variables"""
@@ -38,8 +39,18 @@ def get_db():
 
 def init_db():
     """Initialize database - create all tables"""
-    Base.metadata.create_all(bind=engine)
-    ensure_resume_analysis_columns()
+    last_error = None
+    for attempt in range(1, 11):
+        try:
+            Base.metadata.create_all(bind=engine)
+            ensure_resume_analysis_columns()
+            return
+        except Exception as exc:
+            last_error = exc
+            if attempt == 10:
+                break
+            time.sleep(3)
+    raise last_error
 
 
 def ensure_resume_analysis_columns():

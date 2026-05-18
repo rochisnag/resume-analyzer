@@ -1,7 +1,7 @@
 import { useState } from "react";
 import tektalisLogo from "../assets/tektalis-logo.svg";
 
-const API_BASE = "http://127.0.0.1:8000";
+const API_BASE = "http://localhost:8000";
 
 export default function SignInPage({ onSignedIn }) {
   const [credentials, setCredentials] = useState({ email: "", password: "" });
@@ -73,10 +73,10 @@ export default function SignInPage({ onSignedIn }) {
 
         <form className="signin-form" onSubmit={signIn}>
           <label>
-            <span>Email</span>
+            <span>Username</span>
             <input
-              type="email"
-              autoComplete="email"
+              type="text"
+              autoComplete="username"
               value={credentials.email}
               onChange={(event) => setCredentials({ ...credentials, email: event.target.value })}
               required

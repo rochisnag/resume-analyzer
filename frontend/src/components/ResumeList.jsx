@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import AppNav from "./AppNav";
 
-const API_BASE = "http://127.0.0.1:8000";
+const API_BASE = "http://localhost:8000";
 const scoreNumber = (score) => Math.round(Number(score) || 0);
 
 const getScore = (analysis) => (

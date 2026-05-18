@@ -1,7 +1,7 @@
 import { useState } from "react";
 import AppNav from "./AppNav";
 
-const API_BASE = "http://127.0.0.1:8000";
+const API_BASE = "http://localhost:8000";
 
 export default function AdminPage({ onNavigate }) {
   const [userDraft, setUserDraft] = useState({
@@ -44,9 +44,10 @@ export default function AdminPage({ onNavigate }) {
               <h2>Create resume analyzer user</h2>
             </div>
             <label>
-              <span>Email</span>
+              <span>Username</span>
               <input
-                type="email"
+                type="text"
+                autoComplete="username"
                 value={userDraft.email}
                 onChange={(event) => setUserDraft({ ...userDraft, email: event.target.value })}
                 required

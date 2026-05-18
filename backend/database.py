@@ -1,6 +1,7 @@
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import sessionmaker, declarative_base
 from pydantic_settings import BaseSettings
+import hashlib
 import os
 import time
 
@@ -43,6 +44,7 @@ def init_db():
     for attempt in range(1, 11):
         try:
             Base.metadata.create_all(bind=engine)
+            ensure_default_user()
             ensure_resume_analysis_columns()
             return
         except Exception as exc:
@@ -51,6 +53,30 @@ def init_db():
                 break
             time.sleep(3)
     raise last_error
+
+
+def hash_default_password(password: str) -> str:
+    salt = b"resume_analyzer_default_user"
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, 120000)
+    return f"pbkdf2_sha256${salt.hex()}${digest.hex()}"
+
+
+def ensure_default_user():
+    """Create the default local user if it is missing."""
+    from models import User
+
+    with SessionLocal() as db:
+        existing = db.query(User).filter(User.email == "tek-1").first()
+        if existing:
+            return
+        user = User(
+            email="tek-1",
+            hashed_password=hash_default_password("Tek@123"),
+            role="admin",
+            is_active=True,
+        )
+        db.add(user)
+        db.commit()
 
 
 def ensure_resume_analysis_columns():

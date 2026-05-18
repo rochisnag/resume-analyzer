@@ -629,7 +629,7 @@ async def list_users(db = Depends(get_db)):
 async def create_user(payload: UserCreate, db = Depends(get_db)):
     existing = db.query(User).filter(User.email == payload.email.lower().strip()).first()
     if existing:
-        raise HTTPException(status_code=409, detail="A user with this email already exists")
+        raise HTTPException(status_code=409, detail="A user with this username already exists")
 
     user = User(
         email=payload.email.lower().strip(),
@@ -647,7 +647,7 @@ async def create_user(payload: UserCreate, db = Depends(get_db)):
 async def login(payload: UserLogin, db = Depends(get_db)):
     user = db.query(User).filter(User.email == payload.email.lower().strip()).first()
     if not user or not user.is_active or not verify_password(payload.password, user.hashed_password):
-        raise HTTPException(status_code=401, detail="Invalid email or password")
+        raise HTTPException(status_code=401, detail="Invalid username or password")
     return {"user": user}
 
 

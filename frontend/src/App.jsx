@@ -8,7 +8,7 @@ import SignInPage from "./components/SignInPage";
 import tektalisLogo from "./assets/tektalis-logo.svg";
 import "./App.css";
 
-const API_BASE = "http://127.0.0.1:8000";
+const API_BASE = "http://localhost:8000";
 const JOB_CONFIG_STORAGE_KEY = "resumeiq.jobConfigs";
 const AUTH_STORAGE_KEY = "resumeiq.currentUser";
 

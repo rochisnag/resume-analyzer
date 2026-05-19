@@ -283,6 +283,28 @@ def parse_graph_datetime(value: str | None) -> datetime | None:
         return None
 
 
+def utc_datetime(value: datetime | None) -> datetime | None:
+    if not value:
+        return None
+    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+
+def latest_inbound_received_at(db) -> datetime | None:
+    latest = (
+        db.query(InboundEmail)
+        .order_by(InboundEmail.received_at.desc(), InboundEmail.id.desc())
+        .first()
+    )
+    return utc_datetime(latest.received_at) if latest else None
+
+
+def graph_datetime_filter(value: datetime | None) -> str | None:
+    value = utc_datetime(value)
+    if not value:
+        return None
+    return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
 def matched_mail_role(
     file_bytes: bytes,
     filename: str,
@@ -837,19 +859,28 @@ async def pull_mail_graph(payload: MailPullRequest, settings: dict, db):
             ["Mail.ReadWrite", "Mail.Send", "offline_access"],
         )
         user_path = graph_user_path(settings, app_token)
+        last_received_at = latest_inbound_received_at(db)
+        graph_params = {
+            "$top": payload.max_messages,
+            "$orderby": "receivedDateTime desc",
+            "$select": "id,subject,from,internetMessageId,hasAttachments,receivedDateTime",
+        }
+        if last_received_at:
+            graph_params["$filter"] = f"receivedDateTime gt {graph_datetime_filter(last_received_at)}"
+
         response = graph_request(
             "GET",
             f"{user_path}/mailFolders/inbox/messages",
             token,
-            params={
-                "$top": payload.max_messages,
-                "$orderby": "receivedDateTime desc",
-                "$select": "id,subject,from,internetMessageId,hasAttachments,receivedDateTime",
-            },
+            params=graph_params,
             headers={"Prefer": 'outlook.body-content-type="text"'},
         )
         messages = response.json().get("value", [])
-        logger.info("Graph mail pull found %s inbox message(s)", len(messages))
+        logger.info(
+            "Graph mail pull found %s inbox message(s) after %s",
+            len(messages),
+            last_received_at.isoformat() if last_received_at else "beginning",
+        )
 
         for graph_message in messages:
             graph_id = graph_message["id"]
@@ -861,6 +892,9 @@ async def pull_mail_graph(payload: MailPullRequest, settings: dict, db):
             )
             subject = graph_message.get("subject") or ""
             received_at = parse_graph_datetime(graph_message.get("receivedDateTime"))
+            if last_received_at and received_at and received_at <= last_received_at:
+                skipped.append({"message_id": mail_message_id, "reason": "older than last processed mail"})
+                continue
 
             existing_mail = db.query(InboundEmail).filter(
                 InboundEmail.message_id == mail_message_id
@@ -1046,8 +1080,13 @@ async def pull_mail(payload: MailPullRequest, db = Depends(get_db)):
         mailbox = imaplib.IMAP4_SSL(settings["imap_host"], settings["imap_port"])
         authenticate_imap(mailbox, settings)
         mailbox.select("INBOX")
-        _, search_data = mailbox.search(None, "UNSEEN")
-        message_ids = search_data[0].split()[: payload.max_messages]
+        last_received_at = latest_inbound_received_at(db)
+        if last_received_at:
+            since_date = last_received_at.astimezone(timezone.utc).strftime("%d-%b-%Y")
+            _, search_data = mailbox.search(None, "SINCE", since_date)
+        else:
+            _, search_data = mailbox.search(None, "ALL")
+        message_ids = list(reversed(search_data[0].split()))[: payload.max_messages]
 
         for message_id in message_ids:
             _, message_data = mailbox.fetch(message_id, "(RFC822)")
@@ -1065,6 +1104,11 @@ async def pull_mail(payload: MailPullRequest, db = Depends(get_db)):
                     received_at = received_at.replace(tzinfo=timezone.utc)
             except (TypeError, ValueError):
                 received_at = None
+            received_at = utc_datetime(received_at)
+
+            if last_received_at and received_at and received_at <= last_received_at:
+                skipped.append({"message_id": mail_message_id, "reason": "older than last processed mail"})
+                continue
 
             existing_mail = db.query(InboundEmail).filter(
                 InboundEmail.message_id == mail_message_id

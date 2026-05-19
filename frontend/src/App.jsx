@@ -10,6 +10,22 @@ import "./App.css";
 
 const API_BASE = "http://localhost:8000";
 const JOB_CONFIG_STORAGE_KEY = "resumeiq.jobConfigs";
+const AUTH_STORAGE_KEY = "resumeiq.currentUser";
+const SESSION_DURATION_MS = 30 * 60 * 1000;
+
+const readSavedSession = () => {
+  try {
+    const saved = JSON.parse(window.localStorage.getItem(AUTH_STORAGE_KEY) || "null");
+    if (!saved?.user || !saved?.expiresAt || saved.expiresAt <= Date.now()) {
+      window.localStorage.removeItem(AUTH_STORAGE_KEY);
+      return null;
+    }
+    return saved;
+  } catch {
+    window.localStorage.removeItem(AUTH_STORAGE_KEY);
+    return null;
+  }
+};
 
 const splitList = (value) => (
   value
@@ -267,7 +283,8 @@ const createBlankRole = () => ({
 });
 
 export default function App() {
-  const [currentUser, setCurrentUser] = useState(null);
+  const [currentUser, setCurrentUser] = useState(() => readSavedSession()?.user || null);
+  const [sessionExpiresAt, setSessionExpiresAt] = useState(() => readSavedSession()?.expiresAt || null);
   const [view, setView] = useState("configure");
   const [jobConfigs, setJobConfigs] = useState(() => {
     try {
@@ -461,7 +478,7 @@ export default function App() {
           roles_json: JSON.stringify(configuredMailboxRoles),
           expected_experience_level: selectedJob.experienceLevel || "junior",
           min_fit_score: Number(selectedJob.minFitScore) || 80,
-          max_messages: 20,
+          max_messages: 50,
           send_shortlist_emails: true,
         }),
       });
@@ -497,15 +514,32 @@ export default function App() {
   }, [currentUser, runMailboxAnalysis]);
 
   const handleSignedIn = (user) => {
+    const expiresAt = Date.now() + SESSION_DURATION_MS;
     setCurrentUser(user);
+    setSessionExpiresAt(expiresAt);
+    window.localStorage.setItem(
+      AUTH_STORAGE_KEY,
+      JSON.stringify({ user, expiresAt })
+    );
   };
 
   const handleSignOut = () => {
     setCurrentUser(null);
+    setSessionExpiresAt(null);
     setSelectedAnalysis(null);
     setError(null);
+    window.localStorage.removeItem(AUTH_STORAGE_KEY);
     window.history.replaceState({ page: "signin" }, "", "#signin");
   };
+
+  useEffect(() => {
+    if (!currentUser || !sessionExpiresAt) return undefined;
+    const sessionTimer = window.setTimeout(
+      handleSignOut,
+      Math.max(0, sessionExpiresAt - Date.now())
+    );
+    return () => window.clearTimeout(sessionTimer);
+  }, [currentUser, sessionExpiresAt]);
 
   useEffect(() => {
     if (!currentUser) {

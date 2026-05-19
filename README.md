@@ -16,11 +16,14 @@ Open:
 http://localhost:3000
 ```
 
+When running the frontend locally with `npm run dev`, Vite opens the sign-in page in your browser automatically.
+
 Default sign-in:
 
 ```text
-Username: Tek-1
-Password: Tek@123
+Username: TEK-1
+Email: rochisna.g@tektalis.com
+Password: Tek@12345
 ```
 
 ## Environment

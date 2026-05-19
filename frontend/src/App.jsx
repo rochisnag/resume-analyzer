@@ -10,7 +10,6 @@ import "./App.css";
 
 const API_BASE = "http://localhost:8000";
 const JOB_CONFIG_STORAGE_KEY = "resumeiq.jobConfigs";
-const AUTH_STORAGE_KEY = "resumeiq.currentUser";
 
 const splitList = (value) => (
   value
@@ -268,14 +267,7 @@ const createBlankRole = () => ({
 });
 
 export default function App() {
-  const [currentUser, setCurrentUser] = useState(() => {
-    try {
-      const saved = window.localStorage.getItem(AUTH_STORAGE_KEY);
-      return saved ? JSON.parse(saved) : null;
-    } catch {
-      return null;
-    }
-  });
+  const [currentUser, setCurrentUser] = useState(null);
   const [view, setView] = useState("configure");
   const [jobConfigs, setJobConfigs] = useState(() => {
     try {
@@ -506,16 +498,20 @@ export default function App() {
 
   const handleSignedIn = (user) => {
     setCurrentUser(user);
-    window.localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(user));
   };
 
   const handleSignOut = () => {
     setCurrentUser(null);
     setSelectedAnalysis(null);
     setError(null);
-    window.localStorage.removeItem(AUTH_STORAGE_KEY);
     window.history.replaceState({ page: "signin" }, "", "#signin");
   };
+
+  useEffect(() => {
+    if (!currentUser) {
+      window.history.replaceState({ page: "signin" }, "", "#signin");
+    }
+  }, [currentUser]);
 
   if (!currentUser) {
     return <SignInPage onSignedIn={handleSignedIn} />;

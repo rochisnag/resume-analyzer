@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import create_engine, func, inspect, text
 from sqlalchemy.orm import sessionmaker, declarative_base
 from pydantic_settings import BaseSettings
 import hashlib
@@ -65,23 +65,29 @@ def ensure_default_user():
     """Create the default local user if it is missing."""
     from models import User
 
-    default_email = "rochisna.g@tektalis.com"
-    legacy_email = "tek-1"
+    default_email = "TEK-1"
+    default_password = "Tek@12345"
+    legacy_email = "rochisna.g@tektalis.com"
 
     with SessionLocal() as db:
-        existing = db.query(User).filter(User.email == default_email).first()
+        existing = db.query(User).filter(func.lower(User.email) == default_email.lower()).first()
         if existing:
+            existing.hashed_password = hash_default_password(default_password)
+            existing.role = "admin"
+            existing.is_active = True
+            db.commit()
             return
-        legacy_user = db.query(User).filter(User.email == legacy_email).first()
+        legacy_user = db.query(User).filter(func.lower(User.email) == legacy_email.lower()).first()
         if legacy_user:
             legacy_user.email = default_email
+            legacy_user.hashed_password = hash_default_password(default_password)
             legacy_user.role = "admin"
             legacy_user.is_active = True
             db.commit()
             return
         user = User(
             email=default_email,
-            hashed_password=hash_default_password("Tek@123"),
+            hashed_password=hash_default_password(default_password),
             role="admin",
             is_active=True,
         )

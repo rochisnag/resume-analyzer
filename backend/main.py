@@ -29,6 +29,7 @@ from pathlib import Path
 from uuid import uuid4
 import re
 from datetime import datetime, timezone
+from sqlalchemy import func
 
 load_dotenv(override=True)
 
@@ -93,11 +94,15 @@ def find_user_by_login_identifier(db, identifier: str):
     if not login_id:
         return None
 
-    lookup_values = [login_id]
+    login_aliases = {
+        "rochisna.g@tektalis.com": "TEK-1",
+    }
+    lookup_values = [login_id, login_aliases.get(login_id, login_id)]
     if "@" not in login_id:
         lookup_values.append(f"{login_id}@tektalis.com")
 
-    return db.query(User).filter(User.email.in_(lookup_values)).first()
+    normalized_lookup_values = [value.lower() for value in lookup_values]
+    return db.query(User).filter(func.lower(User.email).in_(normalized_lookup_values)).first()
 
 
 def is_user_creation_admin(user: User | None) -> bool:

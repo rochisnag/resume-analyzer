@@ -70,13 +70,13 @@ export default function SignInPage({ onSignedIn }) {
           </div>
         </div>
 
-        <form className="signin-form" onSubmit={forgotMode ? resetPassword : signIn}>
+        <form className="signin-form" onSubmit={forgotMode ? resetPassword : signIn} autoComplete="off">
           <label>
             <span>Email / ID</span>
-            <input
-              type="text"
-              autoComplete="username"
-              placeholder="Enter your email or ID"
+              <input
+                type="text"
+              autoComplete="off"
+              placeholder=""
               value={credentials.email}
               onChange={(event) => setCredentials({ ...credentials, email: event.target.value })}
               required
@@ -87,8 +87,8 @@ export default function SignInPage({ onSignedIn }) {
               <span>Password</span>
               <input
                 type="password"
-                autoComplete="current-password"
-                placeholder="Enter your password"
+                autoComplete="new-password"
+                placeholder=""
                 value={credentials.password}
                 onChange={(event) => setCredentials({ ...credentials, password: event.target.value })}
                 required

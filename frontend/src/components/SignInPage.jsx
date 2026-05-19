@@ -76,7 +76,7 @@ export default function SignInPage({ onSignedIn }) {
             <input
               type="text"
               autoComplete="username"
-              placeholder="TEK-1 or rochisna.g@tektalis.com"
+              placeholder="Enter your email or ID"
               value={credentials.email}
               onChange={(event) => setCredentials({ ...credentials, email: event.target.value })}
               required
@@ -88,7 +88,7 @@ export default function SignInPage({ onSignedIn }) {
               <input
                 type="password"
                 autoComplete="current-password"
-                placeholder="Tek@12345"
+                placeholder="Enter your password"
                 value={credentials.password}
                 onChange={(event) => setCredentials({ ...credentials, password: event.target.value })}
                 required

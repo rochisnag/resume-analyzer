@@ -1,7 +1,7 @@
 import { useState } from "react";
 import tektalisLogo from "../assets/tektalis-logo.svg";
 
-const API_BASE = "http://localhost:8000";
+const API_BASE = "";
 
 export default function SignInPage({ onSignedIn }) {
   const [credentials, setCredentials] = useState({ email: "", password: "" });

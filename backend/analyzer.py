@@ -313,15 +313,87 @@ class ResumeAnalyzer:
         match = re.search(r'(?:\+?\d{1,3}[-.\s]?)?(?:\(?\d{3,5}\)?[-.\s]?)?\d{3,5}[-.\s]?\d{4}\b', text)
         return match.group(0).strip() if match else None
 
+    def get_recent_education_years(self, text: str) -> bool:
+        """Check if education was completed or will be completed in 2024-2030."""
+        years = [int(y) for y in re.findall(r'\b(202[4-9]|2030)\b', text)]
+        if years:
+            for year in set(years):
+                matches = re.finditer(r'\b' + str(year) + r'\b', text)
+                for m in matches:
+                    start = max(0, m.start() - 100)
+                    end = min(len(text), m.end() + 100)
+                    context = text[start:end].lower()
+                    edu_keywords = [
+                        "education", "degree", "bachelor", "master", "university", "college", 
+                        "btech", "mtech", "b.tech", "m.tech", "bsc", "msc", "b.e", "b.s", "m.s", 
+                        "m.sc", "b.sc", "graduate", "graduation", "class", "school"
+                    ]
+                    if any(ek in context for ek in edu_keywords):
+                        return True
+        return False
+
     def extract_experience_years(self, text: str) -> Optional[str]:
         """Extract an explicit years-of-experience phrase when present."""
-        match = re.search(r'\b(\d{1,2}\+?)\s*(?:years?|yrs?)\b', text, re.IGNORECASE)
-        return f"{match.group(1)} years" if match else None
+        matches = list(re.finditer(r'\b(\d{1,2}\+?)\s*(?:years?|yrs?)\b', text, re.IGNORECASE))
+        for match in matches:
+            val_str = match.group(1).replace('+', '')
+            try:
+                val = float(val_str)
+            except ValueError:
+                continue
+            if val > 20:
+                continue
+            return f"{match.group(1)} years"
+        return None
 
     def extract_experience_number(self, text: str) -> Optional[float]:
         """Extract a numeric years-of-experience value when present."""
-        match = re.search(r'\b(\d{1,2})(?:\+)?\s*(?:years?|yrs?)\b', text, re.IGNORECASE)
-        return float(match.group(1)) if match else None
+        matches = list(re.finditer(r'\b(\d{1,2})(?:\+)?\s*(?:years?|yrs?)\b', text, re.IGNORECASE))
+        for match in matches:
+            val = float(match.group(1))
+            if val > 20:
+                continue
+            return val
+        return None
+
+    def has_professional_title(self, text: str, title_pattern: str) -> bool:
+        """Helper to find if a keyword matches a professional title, excluding false positives."""
+        text_lower = text.lower()
+        matches = list(re.finditer(title_pattern, text_lower))
+        for match in matches:
+            word = match.group(1) if match.lastindex else match.group(0)
+            start = match.start()
+            end = match.end()
+            
+            context_start = max(0, start - 40)
+            context_end = min(len(text_lower), end + 40)
+            context = text_lower[context_start:context_end]
+            
+            # 1. Check for student / club / extracurricular contexts
+            student_keywords = ["student", "club", "society", "committee", "volunteer", "association", "extracurricular", "university", "college", "school", "forge"]
+            if any(sk in context for sk in student_keywords):
+                continue
+                
+            # 2. Check for senior/sr false positives
+            if word in ["senior", "sr"]:
+                secondary_keywords = ["secondary", "school", "student", "year", "thesis", "project", "design", "sec", "seco", "secodary", "class", "12th", "xii"]
+                if any(sk in context for sk in secondary_keywords):
+                    continue
+                
+            # 3. Check for executive false positives
+            if word == "executive":
+                summary_keywords = ["summary", "profile", "presence", "briefing", "report", "assistant", "support"]
+                if any(sk in context for sk in summary_keywords):
+                    continue
+            
+            # 4. Check for principal false positives
+            if word == "principal":
+                tech_keywords = ["component", "components", "analysis", "investigator", "school", "college"]
+                if any(tk in context for tk in tech_keywords):
+                    continue
+                    
+            return True
+        return False
 
     def is_fresher_role(self, job_description: str) -> bool:
         """Return True when the role explicitly targets freshers or entry-level candidates."""
@@ -339,10 +411,10 @@ class ResumeAnalyzer:
 
     def classify_experience_level(self, resume_text: str, job_description: str = "") -> str:
         """Classify candidates for leaderboard segregation."""
-        combined = f"{resume_text}\n{job_description}".lower()
         if self.is_fresher_role(job_description):
             return "junior"
 
+        # 1. Years of experience check
         years = self.extract_experience_number(resume_text)
         if years is not None:
             if years <= 2:
@@ -353,13 +425,22 @@ class ResumeAnalyzer:
                 return "senior"
             return "executive"
 
-        if re.search(r"\b(executive|director|head of|vp|vice president|principal)\b", combined):
+        # 2. Recent graduation/education check (2024-2030)
+        if self.get_recent_education_years(resume_text):
+            return "junior"
+
+        # 3. Keyword matches on resume text only
+        is_exec = self.has_professional_title(resume_text, r"\b(executive|director|head of|vp|vice president|principal)\b")
+        if is_exec:
             return "executive"
-        if re.search(r"\b(senior|sr\.?|lead|staff)\b", combined):
+            
+        is_senior = self.has_professional_title(resume_text, r"\b(senior|sr\.?|lead|staff)\b")
+        if is_senior:
             return "senior"
 
-        if re.search(r"\b(intern|internship|fresher|entry[-\s]?level|junior)\b", combined):
+        if re.search(r"\b(intern|internship|fresher|entry[-\s]?level|junior|student)\b", resume_text.lower()):
             return "junior"
+            
         return "junior"
 
     # ── 🔥 NEW: Resume Validation ───────────────────────────────────────────

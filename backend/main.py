@@ -28,7 +28,8 @@ import logging
 from pathlib import Path
 from uuid import uuid4
 import re
-from datetime import datetime, timezone
+from urllib.parse import quote
+from datetime import datetime, timedelta, timezone
 from sqlalchemy import func
 
 load_dotenv(override=True)
@@ -289,13 +290,33 @@ def utc_datetime(value: datetime | None) -> datetime | None:
     return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
 
 
-def latest_inbound_received_at(db) -> datetime | None:
+def latest_processed_resume_received_at(db) -> datetime | None:
     latest = (
         db.query(InboundEmail)
+        .filter(InboundEmail.status == "processed")
         .order_by(InboundEmail.received_at.desc(), InboundEmail.id.desc())
         .first()
     )
     return utc_datetime(latest.received_at) if latest else None
+
+
+def inbound_email_summary(inbound: InboundEmail | None) -> dict | None:
+    if not inbound:
+        return None
+    attachments = []
+    try:
+        attachments = json.loads(inbound.raw_file_paths or "[]")
+    except json.JSONDecodeError:
+        attachments = []
+    return {
+        "message_id": inbound.message_id,
+        "sender": inbound.sender_email,
+        "subject": inbound.subject,
+        "received_at": inbound.received_at.isoformat() if inbound.received_at else None,
+        "status": inbound.status,
+        "attachments": attachments,
+        "error": inbound.error_message,
+    }
 
 
 def graph_datetime_filter(value: datetime | None) -> str | None:
@@ -340,6 +361,7 @@ def mail_settings() -> dict:
         "tenant_id": os.getenv("MS_TENANT_ID", "common"),
         "client_id": os.getenv("MS_CLIENT_ID", ""),
         "client_secret": os.getenv("MS_CLIENT_SECRET", ""),
+        "lookback_days": int(os.getenv("MAIL_LOOKBACK_DAYS", "7")),
     }
 
 
@@ -447,6 +469,48 @@ def graph_request(method: str, path_or_url: str, token: str, **kwargs):
     if response.status_code >= 400:
         raise RuntimeError(f"Graph API {method} {url} failed: {response.status_code} {response.text}")
     return response
+
+
+def graph_folder_messages(user_path: str, token: str, folder_path: str, folder_name: str, params: dict) -> list[dict]:
+    response = graph_request(
+        "GET",
+        f"{user_path}/{folder_path}/messages",
+        token,
+        params=params,
+        headers={"Prefer": 'outlook.body-content-type="text"'},
+    )
+    messages = response.json().get("value", [])
+    for message in messages:
+        message["_folder_name"] = folder_name
+    return messages
+
+
+def graph_inbox_and_child_messages(user_path: str, token: str, params: dict, max_messages: int) -> list[dict]:
+    messages = graph_folder_messages(user_path, token, "mailFolders/inbox", "Inbox", params)
+    folders_response = graph_request(
+        "GET",
+        f"{user_path}/mailFolders/inbox/childFolders",
+        token,
+        params={"$top": 100, "$select": "id,displayName"},
+    )
+    for folder in folders_response.json().get("value", []):
+        folder_id = quote(folder.get("id", ""), safe="")
+        if not folder_id:
+            continue
+        messages.extend(
+            graph_folder_messages(
+                user_path,
+                token,
+                f"mailFolders/{folder_id}",
+                folder.get("displayName") or "Inbox subfolder",
+                params,
+            )
+        )
+    messages.sort(
+        key=lambda item: parse_graph_datetime(item.get("receivedDateTime")) or datetime.min.replace(tzinfo=timezone.utc),
+        reverse=True,
+    )
+    return messages[:max_messages]
 
 
 def graph_send_shortlist_email(
@@ -859,26 +923,20 @@ async def pull_mail_graph(payload: MailPullRequest, settings: dict, db):
             ["Mail.ReadWrite", "Mail.Send", "offline_access"],
         )
         user_path = graph_user_path(settings, app_token)
-        last_received_at = latest_inbound_received_at(db)
+        last_received_at = latest_processed_resume_received_at(db)
+        lookback_since = datetime.now(timezone.utc) - timedelta(days=max(1, settings.get("lookback_days", 7)))
         graph_params = {
             "$top": payload.max_messages,
             "$orderby": "receivedDateTime desc",
             "$select": "id,subject,from,internetMessageId,hasAttachments,receivedDateTime",
+            "$filter": f"receivedDateTime ge {graph_datetime_filter(lookback_since)}",
         }
-        if last_received_at:
-            graph_params["$filter"] = f"receivedDateTime gt {graph_datetime_filter(last_received_at)}"
 
-        response = graph_request(
-            "GET",
-            f"{user_path}/mailFolders/inbox/messages",
-            token,
-            params=graph_params,
-            headers={"Prefer": 'outlook.body-content-type="text"'},
-        )
-        messages = response.json().get("value", [])
+        messages = graph_inbox_and_child_messages(user_path, token, graph_params, payload.max_messages)
         logger.info(
-            "Graph mail pull found %s inbox message(s) after %s",
+            "Graph mail pull found %s inbox/child-folder message(s) since %s; latest processed is %s",
             len(messages),
+            lookback_since.isoformat(),
             last_received_at.isoformat() if last_received_at else "beginning",
         )
 
@@ -891,10 +949,8 @@ async def pull_mail_graph(payload: MailPullRequest, settings: dict, db):
                 .get("address", "")
             )
             subject = graph_message.get("subject") or ""
+            folder_name = graph_message.get("_folder_name") or "Inbox"
             received_at = parse_graph_datetime(graph_message.get("receivedDateTime"))
-            if last_received_at and received_at and received_at <= last_received_at:
-                skipped.append({"message_id": mail_message_id, "reason": "older than last processed mail"})
-                continue
 
             existing_mail = db.query(InboundEmail).filter(
                 InboundEmail.message_id == mail_message_id
@@ -1018,6 +1074,7 @@ async def pull_mail_graph(payload: MailPullRequest, settings: dict, db):
                     "message_id": mail_message_id,
                     "sender": sender,
                     "subject": subject,
+                    "folder": folder_name,
                     "received_at": received_at.isoformat() if received_at else None,
                     "attachments": attachment_results,
                 })
@@ -1033,6 +1090,7 @@ async def pull_mail_graph(payload: MailPullRequest, settings: dict, db):
                     "message_id": mail_message_id,
                     "sender": sender,
                     "subject": subject,
+                    "folder": folder_name,
                     "error": str(exc),
                 })
 
@@ -1080,12 +1138,9 @@ async def pull_mail(payload: MailPullRequest, db = Depends(get_db)):
         mailbox = imaplib.IMAP4_SSL(settings["imap_host"], settings["imap_port"])
         authenticate_imap(mailbox, settings)
         mailbox.select("INBOX")
-        last_received_at = latest_inbound_received_at(db)
-        if last_received_at:
-            since_date = last_received_at.astimezone(timezone.utc).strftime("%d-%b-%Y")
-            _, search_data = mailbox.search(None, "SINCE", since_date)
-        else:
-            _, search_data = mailbox.search(None, "ALL")
+        lookback_since = datetime.now(timezone.utc) - timedelta(days=max(1, settings.get("lookback_days", 7)))
+        since_date = lookback_since.astimezone(timezone.utc).strftime("%d-%b-%Y")
+        _, search_data = mailbox.search(None, "SINCE", since_date)
         message_ids = list(reversed(search_data[0].split()))[: payload.max_messages]
 
         for message_id in message_ids:
@@ -1105,10 +1160,6 @@ async def pull_mail(payload: MailPullRequest, db = Depends(get_db)):
             except (TypeError, ValueError):
                 received_at = None
             received_at = utc_datetime(received_at)
-
-            if last_received_at and received_at and received_at <= last_received_at:
-                skipped.append({"message_id": mail_message_id, "reason": "older than last processed mail"})
-                continue
 
             existing_mail = db.query(InboundEmail).filter(
                 InboundEmail.message_id == mail_message_id
@@ -1248,6 +1299,34 @@ async def pull_mail(payload: MailPullRequest, db = Depends(get_db)):
     except Exception as exc:
         logger.error(f"Mail pull failed: {exc}")
         raise HTTPException(status_code=500, detail=f"Mail pull failed: {exc}")
+
+
+@app.get("/mail/status", tags=["Mail"])
+async def mail_status(db = Depends(get_db)):
+    latest_processed = (
+        db.query(InboundEmail)
+        .filter(InboundEmail.status == "processed")
+        .order_by(InboundEmail.received_at.desc(), InboundEmail.id.desc())
+        .first()
+    )
+    unparsed = (
+        db.query(InboundEmail)
+        .filter(InboundEmail.status.in_(["new", "no_attachment", "failed"]))
+        .order_by(InboundEmail.received_at.desc(), InboundEmail.id.desc())
+        .limit(50)
+        .all()
+    )
+    recent = (
+        db.query(InboundEmail)
+        .order_by(InboundEmail.received_at.desc(), InboundEmail.id.desc())
+        .limit(10)
+        .all()
+    )
+    return {
+        "latest_processed": inbound_email_summary(latest_processed),
+        "unparsed": [inbound_email_summary(item) for item in unparsed],
+        "recent": [inbound_email_summary(item) for item in recent],
+    }
 
 
 @app.post("/mail/send-shortlisted", tags=["Mail"])

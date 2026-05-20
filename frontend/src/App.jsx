@@ -11,7 +11,45 @@ import "./App.css";
 const API_BASE = "http://localhost:8000";
 const JOB_CONFIG_STORAGE_KEY = "resumeiq.jobConfigs";
 const AUTH_STORAGE_KEY = "resumeiq.currentUser";
+const INTENDED_PAGE_STORAGE_KEY = "resumeiq.intendedPage";
+const LAST_PAGE_STORAGE_KEY = "resumeiq.lastPage";
 const SESSION_DURATION_MS = 30 * 60 * 1000;
+const HASH_PAGE_MAP = {
+  configure: "configure",
+  upload: "upload",
+  resumes: "list",
+  leaderboard: "list",
+  analytics: "analytics",
+  users: "users",
+};
+const SIGNED_IN_PAGES = new Set(["configure", "upload", "list", "users", "analytics"]);
+const REMEMBERED_PAGES = new Set(["configure", "upload", "list", "users"]);
+
+const normalizeSignedInPage = (page) => (SIGNED_IN_PAGES.has(page) ? page : "configure");
+const normalizeRememberedPage = (page) => (REMEMBERED_PAGES.has(page) ? page : null);
+
+const pageFromHash = () => {
+  const hash = window.location.hash.replace(/^#/, "");
+  return HASH_PAGE_MAP[hash] || "configure";
+};
+
+const hashForPage = (page) => (page === "list" ? "leaderboard" : page);
+
+const rememberPage = (page) => {
+  const safePage = normalizeRememberedPage(page);
+  if (safePage) {
+    window.localStorage.setItem(LAST_PAGE_STORAGE_KEY, safePage);
+  }
+};
+
+const rememberCurrentPage = () => {
+  if (window.location.hash === "#signin") return;
+  const page = pageFromHash();
+  if (page) {
+    window.sessionStorage.setItem(INTENDED_PAGE_STORAGE_KEY, page);
+    rememberPage(page);
+  }
+};
 
 const readSavedSession = () => {
   try {
@@ -285,7 +323,7 @@ const createBlankRole = () => ({
 export default function App() {
   const [currentUser, setCurrentUser] = useState(() => readSavedSession()?.user || null);
   const [sessionExpiresAt, setSessionExpiresAt] = useState(() => readSavedSession()?.expiresAt || null);
-  const [view, setView] = useState("configure");
+  const [view, setView] = useState(() => pageFromHash());
   const [jobConfigs, setJobConfigs] = useState(() => {
     try {
       const saved = window.localStorage.getItem(JOB_CONFIG_STORAGE_KEY);
@@ -302,6 +340,25 @@ export default function App() {
   const [mailPollStatus, setMailPollStatus] = useState("Automatic Graph mailbox analysis checks every 2 minutes.");
   const [mailPollBusy, setMailPollBusy] = useState(false);
   const canManageUsers = currentUser?.role === "admin";
+
+  const loadMailStatus = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE}/mail/status`);
+      if (!res.ok) return;
+      const data = await res.json();
+      const latest = data.latest_processed;
+      const unparsed = data.unparsed || [];
+      const latestLabel = latest
+        ? `${latest.subject || "No subject"} from ${latest.sender || "unknown sender"}`
+        : "none yet";
+      const unparsedLabel = unparsed.length
+        ? `${unparsed.length} unparsed: ${unparsed.slice(0, 3).map((item) => item.subject || item.message_id).join(", ")}`
+        : "no unparsed mailbox records";
+      setMailPollStatus(`Last parsed mail: ${latestLabel}. ${unparsedLabel}.`);
+    } catch {
+      // Mail status is informational; normal polling will show actionable errors.
+    }
+  }, []);
 
   const saveRoles = async (roles) => {
     setJobConfigs(roles);
@@ -365,14 +422,22 @@ export default function App() {
 
   useEffect(() => {
     if (!currentUser) return undefined;
-    window.history.replaceState({ page: "configure" }, "", "#configure");
+    const initialPage = normalizeSignedInPage(pageFromHash());
+    const allowedInitialPage = initialPage === "users" && !canManageUsers ? "configure" : initialPage;
+    setView(allowedInitialPage);
+    rememberPage(allowedInitialPage);
+    if (!window.history.state?.page || allowedInitialPage !== initialPage) {
+      window.history.replaceState({ page: allowedInitialPage }, "", `#${hashForPage(allowedInitialPage)}`);
+    }
     loadRoles();
     loadHistory();
+    loadMailStatus();
 
     const handlePopState = (event) => {
-      const requestedPage = event.state?.page || "configure";
+      const requestedPage = normalizeSignedInPage(event.state?.page || pageFromHash());
       const page = requestedPage === "users" && !canManageUsers ? "configure" : requestedPage;
       setView(page);
+      rememberPage(page);
       if (page !== "results") setSelectedAnalysis(null);
       setError(null);
     };
@@ -383,7 +448,7 @@ export default function App() {
       window.removeEventListener("popstate", handlePopState);
       window.clearInterval(historyRefresh);
     };
-  }, [currentUser, canManageUsers]);
+  }, [currentUser, canManageUsers, loadMailStatus]);
 
   useEffect(() => {
     if (currentUser && view === "users" && !canManageUsers) {
@@ -422,6 +487,7 @@ export default function App() {
         ...current.filter((item) => !analyzed.some((next) => next.analysis_id === item.analysis_id)),
       ]);
       setView("list");
+      rememberPage("list");
       window.history.pushState({ page: "list" }, "", "#resumes");
       loadHistory();
     } catch (e) {
@@ -433,18 +499,20 @@ export default function App() {
 
   const handleNewAnalysis = () => {
     setView("upload");
+    rememberPage("upload");
     setSelectedAnalysis(null);
     setError(null);
     window.history.pushState({ page: "upload" }, "", "#upload");
   };
 
   const handleNavigate = (page) => {
-    const nextPage = page === "users" && !canManageUsers ? "configure" : page;
+    const requestedPage = normalizeSignedInPage(page);
+    const nextPage = requestedPage === "users" && !canManageUsers ? "configure" : requestedPage;
     setView(nextPage);
+    rememberPage(nextPage);
     if (nextPage !== "results") setSelectedAnalysis(null);
     setError(null);
-    const hash = nextPage === "list" ? "leaderboard" : nextPage;
-    window.history.pushState({ page: nextPage }, "", `#${hash}`);
+    window.history.pushState({ page: nextPage }, "", `#${hashForPage(nextPage)}`);
   };
 
   const handleSelectAnalysis = (analysis) => {
@@ -488,10 +556,12 @@ export default function App() {
       const saved = data.saved_analysis_count || 0;
       const processed = data.processed_count || 0;
       const nextRun = new Date(Date.now() + 120000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-      setMailPollStatus(`Graph mailbox checked: ${processed} message${processed === 1 ? "" : "s"} processed, ${saved} analysis${saved === 1 ? "" : "es"} saved. Next check around ${nextRun}.`);
       await loadHistory();
+      await loadMailStatus();
+      setMailPollStatus((current) => `Graph mailbox checked: ${processed} message${processed === 1 ? "" : "s"} processed, ${saved} analysis${saved === 1 ? "" : "es"} saved. ${current} Next check around ${nextRun}.`);
       if (navigateToList) {
         setView("list");
+        rememberPage("list");
         window.history.pushState({ page: "list" }, "", "#leaderboard");
       }
     } catch (mailError) {
@@ -499,7 +569,7 @@ export default function App() {
     } finally {
       setMailPollBusy(false);
     }
-  }, [configuredMailboxRoles]);
+  }, [configuredMailboxRoles, loadMailStatus]);
 
   const handleSaveRoles = (roles) => {
     saveRoles(roles);
@@ -515,12 +585,21 @@ export default function App() {
 
   const handleSignedIn = (user) => {
     const expiresAt = Date.now() + SESSION_DURATION_MS;
+    const savedPage = normalizeRememberedPage(window.sessionStorage.getItem(INTENDED_PAGE_STORAGE_KEY));
+    const lastPage = normalizeRememberedPage(window.localStorage.getItem(LAST_PAGE_STORAGE_KEY));
+    const requestedPage = savedPage || normalizeSignedInPage(pageFromHash());
+    const preferredPage = requestedPage === "configure" && lastPage ? lastPage : requestedPage;
+    const nextPage = preferredPage === "users" && user.role !== "admin" ? "configure" : preferredPage;
     setCurrentUser(user);
     setSessionExpiresAt(expiresAt);
+    setView(nextPage);
+    rememberPage(nextPage);
     window.localStorage.setItem(
       AUTH_STORAGE_KEY,
       JSON.stringify({ user, expiresAt })
     );
+    window.sessionStorage.removeItem(INTENDED_PAGE_STORAGE_KEY);
+    window.history.replaceState({ page: nextPage }, "", `#${hashForPage(nextPage)}`);
   };
 
   const handleSignOut = () => {
@@ -543,17 +622,25 @@ export default function App() {
 
   useEffect(() => {
     if (!currentUser) {
+      rememberCurrentPage();
       window.history.replaceState({ page: "signin" }, "", "#signin");
     }
   }, [currentUser]);
+
+  useEffect(() => {
+    if (!currentUser || window.location.hash !== "#signin") return;
+    const lastPage = normalizeRememberedPage(window.localStorage.getItem(LAST_PAGE_STORAGE_KEY));
+    const nextPage = lastPage === "users" && !canManageUsers ? "configure" : (lastPage || "configure");
+    setView(nextPage);
+    window.history.replaceState({ page: nextPage }, "", `#${hashForPage(nextPage)}`);
+  }, [currentUser, canManageUsers]);
 
   if (!currentUser) {
     return <SignInPage onSignedIn={handleSignedIn} />;
   }
 
-  if (view === "users" && !canManageUsers) {
-    return null;
-  }
+  const effectiveView = normalizeSignedInPage(view);
+  const safeView = effectiveView === "users" && !canManageUsers ? "configure" : effectiveView;
 
   return (
     <div className="app">
@@ -573,7 +660,7 @@ export default function App() {
       </header>
 
       <main className="main">
-        {view === "upload" && (
+        {safeView === "upload" && (
           <UploadForm
             onAnalyze={handleAnalyze}
             loading={loading}
@@ -587,7 +674,7 @@ export default function App() {
             currentUser={currentUser}
           />
         )}
-        {view === "configure" && (
+        {(safeView === "configure" || !SIGNED_IN_PAGES.has(safeView)) && (
           <ConfigurePage
             roles={jobConfigs}
             onSave={handleSaveRoles}
@@ -596,7 +683,7 @@ export default function App() {
             currentUser={currentUser}
           />
         )}
-        {view === "list" && (
+        {safeView === "list" && (
           <ResumeList
             analyses={analyses}
             onSelect={handleSelectAnalysis}
@@ -607,17 +694,28 @@ export default function App() {
             currentUser={currentUser}
           />
         )}
-        {view === "users" && (
+        {safeView === "users" && (
           <AdminPage
             onNavigate={handleNavigate}
             currentUser={currentUser}
           />
         )}
-        {view === "analytics" && selectedAnalysis && (
+        {safeView === "analytics" && selectedAnalysis && (
           <ResultsDashboard
             result={selectedAnalysis}
             onReset={() => setView("list")}
             resetLabel="Back to Leaderboard"
+          />
+        )}
+        {safeView === "analytics" && !selectedAnalysis && (
+          <ResumeList
+            analyses={analyses}
+            onSelect={handleSelectAnalysis}
+            onNavigate={handleNavigate}
+            loading={historyLoading}
+            error={error}
+            activeJob={defaultUploadJob}
+            currentUser={currentUser}
           />
         )}
       </main>
